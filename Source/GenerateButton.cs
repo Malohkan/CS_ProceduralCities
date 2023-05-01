@@ -1,48 +1,83 @@
-﻿using System;
+﻿using ColossalFramework.UI;
 using System.Collections.Generic;
-using System.Linq;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using ColossalFramework;
-using ColossalFramework.Math;
-using ColossalFramework.Plugins;
-using ColossalFramework.UI;
 using UnityEngine;
-using UnityEngine.Networking.Types;
 
-namespace ProceduralCities {
+namespace ProceduralCities
+{
+    class GenerateButton : UIButton
+    {
+        public Builder BuilderInstance => Builder.Instance;
 
-    class GenerateButton : UIButton {
-        public override void Start() {
+        public override void Start()
+        {
             base.Start();
-            name = "Generate";
-            size = new Vector2(50, 50);
+            name = "GenerateButton";
+            text = $"Generation Stopped {ProceduralCitiesMod.Version}";
+            size = new Vector2(300, 50);
             absolutePosition = new Vector2(50, 50);
-            DebugOutputPanel.AddMessage(PluginManager.MessageType.Message, "Button started");
-            normalBgSprite = "buttonclose";
-            hoveredBgSprite = "buttonclosehover";
-            pressedBgSprite = "buttonclosepressed";
+            normalBgSprite = "ButtonMenu";
+            hoveredBgSprite = "ButtonMenuHovered";
+            pressedBgSprite = "ButtonMenuPressed";
             isInteractive = true;
             Show();
 
             eventClicked += OnEventClicked;
         }
 
-        private void OnEventClicked(UIComponent component, UIMouseEventParameter param) {
-            DebugOutputPanel.AddMessage(PluginManager.MessageType.Message, "clicked");
-            try {
-                new Builder();
-            } catch (Exception exc) {
-                DebugOutputPanel.AddMessage(PluginManager.MessageType.Warning, exc.ToString());
+        private void OnEventClicked(UIComponent component, UIMouseEventParameter param)
+        {
+            DebugThing();
+            return;
+
+            Debug.Log($"Click: {BuilderInstance.IsRunning}");
+            if (BuilderInstance.IsRunning)
+            {
+                BuilderInstance.Stop();
+                text = $"Generation Stopped {ProceduralCitiesMod.Version}";
+            }
+            else
+            {
+                BuilderInstance.Start();
+                text = $"Generation Running {ProceduralCitiesMod.Version}";
             }
         }
 
-        public override void Update() {
-            base.Update();
+        private void DebugThing()
+        {
+            List<uint> prefabIds = new List<uint> { 144, 58, 54, 146 };
+            Dictionary<uint, string> prefabNames = GetPrefabNames(prefabIds);
+            PrintPrefabNames(prefabNames);
+
         }
 
-        public void Destroy() {
-            m_Parent.RemoveUIComponent(this);
+        public Dictionary<uint, string> GetPrefabNames(List<uint> prefabIds)
+        {
+            Dictionary<uint, string> prefabNames = new Dictionary<uint, string>();
+
+            for (uint i = 0; i < PrefabCollection<NetInfo>.PrefabCount(); i++)
+            {
+                NetInfo prefab = PrefabCollection<NetInfo>.GetPrefab(i);
+                if (prefab != null && prefabIds.Contains(i))
+                {
+                    prefabNames[i] = prefab.name;
+                }
+            }
+
+            return prefabNames;
+        }
+
+        public void PrintPrefabNames(Dictionary<uint, string> prefabNames)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.AppendLine("Prefab IDs and Names:");
+
+            foreach (KeyValuePair<uint, string> pair in prefabNames)
+            {
+                sb.AppendLine($"ID: {pair.Key}, Name: {pair.Value}");
+            }
+
+            Debug.Log(sb.ToString());
         }
     }
 }

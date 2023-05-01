@@ -1,19 +1,31 @@
 ﻿using ICities;
+using System.Reflection;
 
 namespace ProceduralCities
 {
 
-    public class ProceduralCitiesMod: IUserMod
+    public class ProceduralCitiesMod : IUserMod
     {
 
-        public string Name 
+        public string Name
         {
-            get { return "Procedural Cities"; }
+            get { return $"Procedural Cities {Version}"; }
         }
 
-        public string Description 
+        public string Description
         {
             get { return "Generate cities using algorithms"; }
+        }
+
+
+        public static string Version
+        {
+            get
+            {
+                var assembly = Assembly.GetExecutingAssembly();
+                var version = assembly.GetName().Version;
+                return $"{version.Major}.{version.Minor}.{version.Build}.{version.Revision}";
+            }
         }
 
     }

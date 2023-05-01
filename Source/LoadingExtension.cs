@@ -14,18 +14,31 @@ namespace ProceduralCities {
 
         public override void OnCreated(ILoading loading) {
             base.OnCreated(loading);
-            DebugOutputPanel.AddMessage(PluginManager.MessageType.Message, "LoadingExtension.OnCreated");
+            Debug.Log($"LoadingExtension.OnCreated {ProceduralCitiesMod.Version}");
+
+            var go = GameObject.Find("procedural_cities");
+            if (go)
+            {
+                Debug.Log($"Reloading button");
+                Object.Destroy(go);
+
+                OnLevelLoaded(LoadMode.LoadGame);
+            }
+            
         }
 
-        public override void OnLevelLoaded(LoadMode mode) {
+        public override void OnLevelLoaded(LoadMode mode)
+        {
             base.OnLevelLoaded(mode);
-            DebugOutputPanel.AddMessage(PluginManager.MessageType.Message, "LoadingExtension.OnLevelLoad");
+            Debug.Log("LoadingExtension.OnLevelLoad");
             button = (GenerateButton)UIView.GetAView().AddUIComponent(typeof(GenerateButton));
             var go = new GameObject("procedural_cities");
+            go.AddComponent<Builder>();
         }
 
+
         public override void OnReleased() {
-            DebugOutputPanel.AddMessage(PluginManager.MessageType.Message, "LoadingExtension.OnReleased");
+            Debug.Log("LoadingExtension.OnReleased");
             var go = GameObject.Find("procedural_cities");
             Object.Destroy(go);
             base.OnReleased();
