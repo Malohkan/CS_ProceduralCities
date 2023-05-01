@@ -35,7 +35,8 @@ namespace ProceduralCities
         private List<IEnumerator> genSteps = new List<IEnumerator>();
         private Coroutine activeCoroutine;
         private int currentStep = 0;
-        private String Version;
+        private String Version = "";
+        public GenerateButton generateButton;
         internal static Builder _instance;
 
         public static Builder Instance
@@ -64,7 +65,6 @@ namespace ProceduralCities
                     GameObject go = new GameObject("Builder");
                     _instance = go.AddComponent<Builder>();
                     _instance.Version = ProceduralCitiesMod.Version;
-                    _instance.GenerateSteps();
                 }
                 return _instance;
             }
@@ -80,48 +80,52 @@ namespace ProceduralCities
             }
         }
 
-        void ResetRoads()
+        public void ResetRoads()
         {
-            // Preserve the original pause state
-            bool originalPauseState = SimulationManager.instance.SimulationPaused;
-
-            // Pause the simulation if it's not already paused
-            if (!originalPauseState)
-            {
-                SimulationManager.instance.SimulationPaused = true;
-            }
-
             var netManager = Singleton<NetManager>.instance;
 
             // Release all segments
-            for (ushort segmentId = 0; segmentId < NetManager.MAX_SEGMENT_COUNT; segmentId++)
+            for (uint i = 1; i < netManager.m_segments.m_buffer.Length; i++)
             {
-                if (netManager.m_segments.m_buffer[segmentId].m_flags != NetSegment.Flags.None)
+                if (netManager.m_segments.m_buffer[i].m_flags != NetSegment.Flags.None)
                 {
-                    netManager.ReleaseSegment(segmentId, true);
+                    // Properly release the segment
+                    netManager.ReleaseSegment((ushort)i, true);
                 }
             }
 
             // Release all nodes
-            for (ushort nodeId = 0; nodeId < NetManager.MAX_NODE_COUNT; nodeId++)
+            for (uint i = 1; i < netManager.m_nodes.m_buffer.Length; i++)
             {
-                if (netManager.m_nodes.m_buffer[nodeId].m_flags != NetNode.Flags.None)
+                if (netManager.m_nodes.m_buffer[i].m_flags != NetNode.Flags.None)
                 {
-                    netManager.ReleaseNode(nodeId);
+                    // Properly release the node
+                    netManager.ReleaseNode((ushort)i);
                 }
             }
-
-            // Clear positionToNode dictionary
-            positionToNode.Clear();
-
-            // Restore the original pause state
-            SimulationManager.instance.SimulationPaused = originalPauseState;
         }
 
 
+        public int StepCount
+        {
+            get
+            {
+                return currentStep;
+            }
+        }
 
+        // Automatically called by Unity as an initializer
         public void Start()
         {
+
+        }
+
+        public void StartBuilding() {
+            if (genSteps.Count == 0)
+            {
+                Debug.Log("Generating Steps");
+                GenerateSteps();
+            }
             Debug.Log($"Start() {Version}: {activeCoroutine == null} && {currentStep} < {genSteps.Count}");
             if (activeCoroutine == null && currentStep < genSteps.Count)
             {
@@ -130,7 +134,7 @@ namespace ProceduralCities
             }
         }
 
-        public void Stop()
+        public void StopBuilding()
         {
             if (activeCoroutine != null)
             {
@@ -145,17 +149,20 @@ namespace ProceduralCities
             Debug.Log($"ExecuteSteps Start {currentStep} < {genSteps.Count}");
             while (currentStep < genSteps.Count)
             {
-                // Debug.Log($"ExecuteSteps {currentStep} < {genSteps.Count} => {currentStep < genSteps.Count}");
+                Debug.Log($"ExecuteSteps {currentStep} < {genSteps.Count} => {currentStep < genSteps.Count}");
 
                 yield return StartCoroutine(genSteps[currentStep]);
                 currentStep++;
             }
             activeCoroutine = null;
+            Debug.Log($"ExecuteSteps Complete");
+            generateButton.RefreshState();
         }
 
         const float pitch = 104; //(maxOffset * 2) / gridSize;
         const float height = 0f;
-        readonly Dictionary<Vector3, ushort> positionToNode = new Dictionary<Vector3, ushort>();
+        readonly private Vector3Dictionary positionToNode = new Vector3Dictionary();
+
 
         public bool IsRunning {
             get {
@@ -163,27 +170,18 @@ namespace ProceduralCities
             }
         }
 
-        static Vector3 crush(Vector3 pos)
+        ushort GetNode(Vector3 position, NetInfo prefab)
         {
-            pos.x = (int)(pos.x * 100) / 100.0f;
-            pos.y = (int)(pos.y * 100) / 100.0f;
-            pos.z = (int)(pos.z * 100) / 100.0f;
-            return pos;
-        }
-
-
-        ushort GetNode(Vector3 position, uint prefabId)
-        {
-            position = crush(position);
             var netManager = Singleton<NetManager>.instance;
             if (positionToNode.ContainsKey(position))
             {
+                Debug.Log($"GetNode found match");
                 return positionToNode[position];
             }
             else
             {
                 ushort nodeId;
-                if (netManager.CreateNode(out nodeId, ref SimulationManager.instance.m_randomizer, PrefabCollection<NetInfo>.GetPrefab(prefabId), position, SimulationManager.instance.m_currentBuildIndex))
+                if (netManager.CreateNode(out nodeId, ref SimulationManager.instance.m_randomizer, prefab, position, SimulationManager.instance.m_currentBuildIndex))
                 {
                     //Debug.LogWarning("created node " + nodeId);
                     ++SimulationManager.instance.m_currentBuildIndex;
@@ -197,11 +195,11 @@ namespace ProceduralCities
             }
         }
 
-        void MakeSegment(Vector3 start, Vector3 end, Vector3 startDirection, Vector3 endDirection, uint prefabId)
+        void MakeSegment(Vector3 start, Vector3 end, Vector3 startDirection, Vector3 endDirection, NetInfo prefab)
         {
             var netManager = Singleton<NetManager>.instance;
             ushort segmentId;
-            if (netManager.CreateSegment(out segmentId, ref SimulationManager.instance.m_randomizer, PrefabCollection<NetInfo>.GetPrefab(prefabId), GetNode(start), GetNode(end), startDirection, endDirection, SimulationManager.instance.m_currentBuildIndex, SimulationManager.instance.m_currentBuildIndex, false))
+            if (netManager.CreateSegment(out segmentId, ref SimulationManager.instance.m_randomizer, prefab, GetNode(start, prefab), GetNode(end, prefab), startDirection, endDirection, SimulationManager.instance.m_currentBuildIndex, SimulationManager.instance.m_currentBuildIndex, false))
             {
                 ++SimulationManager.instance.m_currentBuildIndex;
                 //Debug.LogWarning("made segment");
@@ -212,14 +210,23 @@ namespace ProceduralCities
             }
         }
 
-        void MakeSegment(Vector3 start, Vector3 end, bool flip, uint prefabId)
+        void MakeSegment(Vector3 start, Vector3 end, bool flip, NetInfo prefab)
         {
-            genSteps.Add(MakeSegmentCoroutine(start, end, flip, prefabId));
+            genSteps.Add(MakeSegmentCoroutine(start, end, flip, prefab));
             
         }
 
-        private IEnumerator MakeSegmentCoroutine(Vector3 start, Vector3 end, bool flip, uint prefabId)
-        { 
+        public float GetTerrainHeightWithWater(Vector3 position)
+        {
+            TerrainManager terrainManager = Singleton<TerrainManager>.instance;
+            bool hasWater;
+            float waterOffset = 0f;
+            float combinedHeight = terrainManager.SampleBlockHeightSmoothWithWater(position, true, waterOffset, out hasWater);
+            return combinedHeight;
+        }
+
+        private IEnumerator MakeSegmentCoroutine(Vector3 start, Vector3 end, bool flip, NetInfo prefab)
+        {
             if (flip)
             {
                 var temp = start;
@@ -231,10 +238,14 @@ namespace ProceduralCities
 
             Vector3 direction = new Vector3(end.x - start.x, end.y - start.y, end.z - start.z).normalized;
 
-            start.y += TerrainManager.instance.SampleDetailHeight(start);
-            end.y += TerrainManager.instance.SampleDetailHeight(end);
+            Vector3 modifiedStart = new Vector3(start.x, start.y + GetTerrainHeightWithWater(start), start.z);
+            Vector3 modifiedEnd = new Vector3(end.x, end.y + GetTerrainHeightWithWater(end), end.z);
 
-            if (netManager.CreateSegment(out segmentId, ref SimulationManager.instance.m_randomizer, PrefabCollection<NetInfo>.GetPrefab(prefabId), GetNode(start), GetNode(end), direction, -direction, SimulationManager.instance.m_currentBuildIndex, SimulationManager.instance.m_currentBuildIndex, false))
+
+            ushort startNodeId = GetNode(modifiedStart, prefab);
+            ushort endNodeId = GetNode(modifiedEnd, prefab);
+
+            if (netManager.CreateSegment(out segmentId, ref SimulationManager.instance.m_randomizer, prefab, startNodeId, endNodeId, direction, -direction, SimulationManager.instance.m_currentBuildIndex, SimulationManager.instance.m_currentBuildIndex, false))
             {
                 ++SimulationManager.instance.m_currentBuildIndex;
                 //Debug.LogWarning("made segment");
@@ -247,7 +258,8 @@ namespace ProceduralCities
             yield return null;
         }
 
-        void MakeRoad(Vector3 start, Vector3 end, Vector3 startDirection, Vector3 endDirection, bool flip, uint prefabId)
+
+        void MakeRoad(Vector3 start, Vector3 end, Vector3 startDirection, Vector3 endDirection, bool flip, NetInfo prefab)
         {
             Debug.LogWarning("making bezier road");
             if (flip)
@@ -271,7 +283,7 @@ namespace ProceduralCities
             {
                 Vector3 pos = curve.Position(t);
                 Vector3 dir = curve.Tangent(t);
-                MakeSegment(priorPos, pos, priorDir, -dir, prefabId);
+                MakeSegment(priorPos, pos, priorDir, -dir, prefab);
                 t = curve.Travel(t, pitch);
                 Debug.LogWarning(t.ToString());
                 priorPos = pos;
@@ -280,11 +292,11 @@ namespace ProceduralCities
             {
                 Vector3 pos = curve.Position(1);
                 Vector3 dir = curve.Tangent(1).normalized;
-                MakeSegment(priorPos, pos, priorDir, -dir, prefabId);
+                MakeSegment(priorPos, pos, priorDir, -dir, prefab);
             }
         }
 
-        void MakeRoad(Vector3 start, Vector3 end, bool flip, uint prefabId)
+        void MakeRoad(Vector3 start, Vector3 end, bool flip, NetInfo prefab)
         {
             if (flip)
             {
@@ -298,42 +310,45 @@ namespace ProceduralCities
             {
                 if (dir.x > 0)
                 {
-                    //Debug.LogWarning("made +x vector road");
+                    Debug.Log("made +x vector road");
                     for (float x = start.x; x < end.x; x += pitch)
                     {
                         float clampedIncrement = x + pitch;
                         if (clampedIncrement > end.x) clampedIncrement = end.x;
-                        MakeSegment(new Vector3(x, start.y, start.z), new Vector3(clampedIncrement, start.y, start.z), false, prefabId);
+                        MakeSegment(new Vector3(x, start.y, start.z), new Vector3(clampedIncrement, start.y, start.z), false, prefab);
                     }
                 }
                 else if (dir.x < 0)
                 {
-                    //Debug.LogWarning("made -x vector road");
+                    Debug.Log("made -x vector road");
                     for (float x = start.x; x > end.x; x -= pitch)
                     {
                         float clampedIncrement = x - pitch;
                         if (clampedIncrement < end.x) clampedIncrement = end.x;
-                        MakeSegment(new Vector3(x, start.y, start.z), new Vector3(clampedIncrement, start.y, start.z), false, prefabId);
+                        MakeSegment(new Vector3(x, start.y, start.z), new Vector3(clampedIncrement, start.y, start.z), false, prefab);
                     }
                 }
                 else if (dir.z > 0)
                 {
-                    //Debug.LogWarning("made +z vector road");
+                    Debug.Log("made +z vector road");
+                    // MakeSegment(start, end, false, prefab);
                     for (float z = start.z; z < end.z; z += pitch)
                     {
                         float clampedIncrement = z + pitch;
                         if (clampedIncrement > end.z) clampedIncrement = end.z;
-                        MakeSegment(new Vector3(start.x, start.y, z), new Vector3(start.x, start.y, clampedIncrement), false, prefabId);
+                        MakeSegment(new Vector3(start.x, start.y, z), new Vector3(start.x, start.y, clampedIncrement), false, prefab);
                     }
                 }
                 else if (dir.z < 0)
                 {
-                    //Debug.LogWarning("made -z vector road");
+                    Debug.Log("made -z vector road");
+                    //MakeSegment(start, end, false, prefab);
+
                     for (float z = start.z; z > end.z; z -= pitch)
                     {
                         float clampedIncrement = z - pitch;
                         if (clampedIncrement < end.z) clampedIncrement = end.z;
-                        MakeSegment(new Vector3(start.x, start.y, z), new Vector3(start.x, start.y, clampedIncrement), false, prefabId);
+                        MakeSegment(new Vector3(start.x, start.y, z), new Vector3(start.x, start.y, clampedIncrement), false, prefab);
                     }
                 }
                 else
@@ -349,29 +364,65 @@ namespace ProceduralCities
                 float t = 0;
                 for (; t <= length - pitch; t += pitch)
                 {
-                    MakeSegment(start + direction * t, start + direction * (t + pitch), false, prefabId);
+                    MakeSegment(start + direction * t, start + direction * (t + pitch), false, prefab);
                 }
-                MakeSegment(start + direction * t, end, false, prefabId);
+                MakeSegment(start + direction * t, end, false, prefab);
             }
         }
 
         void MakeBridge(int x)
         {
-            MakeSegment(new Vector3(x * pitch, height, -4 * pitch), new Vector3(x * pitch, height + 10, -3 * pitch), x % 20 == 0, 146);
-            MakeSegment(new Vector3(x * pitch, height + 10, -3 * pitch), new Vector3(x * pitch, height + 20, -2 * pitch), x % 20 == 0, 146);
-            MakeSegment(new Vector3(x * pitch, height + 20, -2 * pitch), new Vector3(x * pitch, height + 30, -1 * pitch), x % 20 == 0, 146);
-            MakeSegment(new Vector3(x * pitch, height + 30, -1 * pitch), new Vector3(x * pitch, height + 30, -0 * pitch), x % 20 == 0, 146);
+            MakeSegment(new Vector3(x * pitch, height, -4 * pitch), new Vector3(x * pitch, height + 10, -3 * pitch), x % 20 == 0, Prefab("Pedestrian Gravel Elevated"));
+            MakeSegment(new Vector3(x * pitch, height + 10, -3 * pitch), new Vector3(x * pitch, height + 20, -2 * pitch), x % 20 == 0, Prefab("Pedestrian Gravel Elevated"));
+            MakeSegment(new Vector3(x * pitch, height + 20, -2 * pitch), new Vector3(x * pitch, height + 30, -1 * pitch), x % 20 == 0, Prefab("Pedestrian Gravel Elevated"));
+            MakeSegment(new Vector3(x * pitch, height + 30, -1 * pitch), new Vector3(x * pitch, height + 30, -0 * pitch), x % 20 == 0, Prefab("Pedestrian Gravel Elevated"));
 
-            MakeSegment(new Vector3(x * pitch, height + 30, 1 * pitch), new Vector3(x * pitch, height + 30, 0 * pitch), x % 20 != 0, 146);
-            MakeSegment(new Vector3(x * pitch, height + 20, 2 * pitch), new Vector3(x * pitch, height + 30, 1 * pitch), x % 20 != 0, 146);
-            MakeSegment(new Vector3(x * pitch, height + 10, 3 * pitch), new Vector3(x * pitch, height + 20, 2 * pitch), x % 20 != 0, 146);
-            MakeSegment(new Vector3(x * pitch, height, 4 * pitch), new Vector3(x * pitch, height + 10, 3 * pitch), x % 20 != 0, 146);
+            MakeSegment(new Vector3(x * pitch, height + 30, 1 * pitch), new Vector3(x * pitch, height + 30, 0 * pitch), x % 20 != 0, Prefab("Pedestrian Gravel Elevated"));
+            MakeSegment(new Vector3(x * pitch, height + 20, 2 * pitch), new Vector3(x * pitch, height + 30, 1 * pitch), x % 20 != 0, Prefab("Pedestrian Gravel Elevated"));
+            MakeSegment(new Vector3(x * pitch, height + 10, 3 * pitch), new Vector3(x * pitch, height + 20, 2 * pitch), x % 20 != 0, Prefab("Pedestrian Gravel Elevated"));
+            MakeSegment(new Vector3(x * pitch, height, 4 * pitch), new Vector3(x * pitch, height + 10, 3 * pitch), x % 20 != 0, Prefab("Pedestrian Gravel Elevated"));
 
+        }
+
+        uint GetPrefabIndexByName(string name)
+        {
+            for (uint i = 0; i < PrefabCollection<NetInfo>.PrefabCount(); i++)
+            {
+                NetInfo prefab = PrefabCollection<NetInfo>.GetPrefab(i);
+                if (prefab != null && prefab.name == name)
+                {
+                    return i;
+                }
+            }
+            throw new Exception($"Prefab with name '{name}' not found.");
+        }
+
+        public void GenerateOneRoad()
+        {
+            Debug.Log("GenerateOneRoad");
+            int x = 0;
+            int zStart = -200;
+            int zStop = 500;
+
+            //MakeRoad(new Vector3(x * pitch, height, zStart), new Vector3(x * pitch, height, zStop), false, Prefab("Basic Road"));
+
+            x = 2;
+            //MakeRoad(new Vector3(x * pitch, height, zStart), new Vector3(x * pitch, height, zStop), x % 20 == 0, Prefab("Pedestrian Gravel"));
+            x = -2;
+            //MakeRoad(new Vector3(x * pitch, height, zStart), new Vector3(x * pitch, height, zStop), x % 20 != 0, Prefab("Pedestrian Pavement"));
+            x = 5;
+            MakeBridge(x);
+        }
+
+        private NetInfo Prefab(String name)
+        {
+            return PrefabCollection<NetInfo>.FindLoaded(name);
         }
 
         // Prefab IDs and Names:
         // ID: 54, Name: Twoway Toll Road Medium 01
         // ID: 58, Name: Highway Connection
+        // ID: 68, Name: Small 4 Lane Road with Bus Lanes Elevated
         // ID: 144, Name: Pedestrian Slope
         // ID: 146, Name: Pedestrian Gravel Elevated
 
@@ -379,11 +430,11 @@ namespace ProceduralCities
         {
             //MakeSegment(new Vector3(0*pitch, height, -10*pitch), new Vector3(-1*pitch, height, -10*pitch), 144);
             //MakeRoad(new Vector3(0*pitch, height, -10*pitch), new Vector3(-10*pitch, height, -10*pitch), false, 144);
-            Debug.LogWarning("GenerateSteps()");
+            Debug.Log("GenerateSteps()");
             for (int x = -50; x <= 50; x += 10)
             {
-                MakeRoad(new Vector3(x * pitch, height, 4 * pitch), new Vector3(x * pitch, height, 43 * pitch), x % 20 == 0, 144);
-                MakeRoad(new Vector3(x * pitch, height, -4 * pitch), new Vector3(x * pitch, height, -43 * pitch), x % 20 != 0, 144);
+                MakeRoad(new Vector3(x * pitch, height, 4 * pitch), new Vector3(x * pitch, height, 43 * pitch), x % 20 == 0, Prefab("Pedestrian Pavement"));
+                MakeRoad(new Vector3(x * pitch, height, -4 * pitch), new Vector3(x * pitch, height, -43 * pitch), x % 20 != 0, Prefab("Pedestrian Pavement"));
                 MakeBridge(x);
             }
 
@@ -393,21 +444,21 @@ namespace ProceduralCities
                 {
                     var start = new Vector3((x + 1) * pitch, height, y * pitch);
                     var end = new Vector3((x + 9) * pitch, height, y * pitch);
-                    MakeRoad(start, start + new Vector3(0.5f * pitch, 0, 0), x % 20 == 0 != (y % 8 == 0), 54);
-                    MakeRoad(start + new Vector3(0.5f * pitch, 0, 0), end - new Vector3(0.5f * pitch, 0, 0), x % 20 == 0 != (y % 8 == 0), 54);
-                    MakeRoad(end - new Vector3(0.5f * pitch, 0, 0), end, x % 20 == 0 != (y % 8 == 0), 54);
+                    MakeRoad(start, start + new Vector3(0.5f * pitch, 0, 0), x % 20 == 0 != (y % 8 == 0), Prefab("Twoway Toll Road Medium 01"));
+                    MakeRoad(start + new Vector3(0.5f * pitch, 0, 0), end - new Vector3(0.5f * pitch, 0, 0), x % 20 == 0 != (y % 8 == 0), Prefab("Twoway Toll Road Medium 01"));
+                    MakeRoad(end - new Vector3(0.5f * pitch, 0, 0), end, x % 20 == 0 != (y % 8 == 0), Prefab("Twoway Toll Road Medium 01"));
 
-                    MakeRoad(start + new Vector3(-1, 0, y % 8 == 0 ? 1 : -1) * pitch, start, x % 20 == 0 != (y % 8 == 0), 58);
-                    MakeRoad(end, end + new Vector3(1, 0, y % 8 == 0 ? 1 : -1) * pitch, x % 20 == 0 != (y % 8 == 0), 58);
+                    MakeRoad(start + new Vector3(-1, 0, y % 8 == 0 ? 1 : -1) * pitch, start, x % 20 == 0 != (y % 8 == 0), Prefab("Highway Connection"));
+                    MakeRoad(end, end + new Vector3(1, 0, y % 8 == 0 ? 1 : -1) * pitch, x % 20 == 0 != (y % 8 == 0), Prefab("Highway Connection"));
 
                     start = new Vector3((x + 1) * pitch, height, -y * pitch);
                     end = new Vector3((x + 9) * pitch, height, -y * pitch);
-                    MakeRoad(start, start + new Vector3(0.5f * pitch, 0, 0), x % 20 == 0 == (y % 8 == 0), 54);
-                    MakeRoad(start + new Vector3(0.5f * pitch, 0, 0), end - new Vector3(0.5f * pitch, 0, 0), x % 20 == 0 == (y % 8 == 0), 54);
-                    MakeRoad(end - new Vector3(0.5f * pitch, 0, 0), end, x % 20 == 0 == (y % 8 == 0), 54);
+                    MakeRoad(start, start + new Vector3(0.5f * pitch, 0, 0), x % 20 == 0 == (y % 8 == 0), Prefab("Twoway Toll Road Medium 01"));
+                    MakeRoad(start + new Vector3(0.5f * pitch, 0, 0), end - new Vector3(0.5f * pitch, 0, 0), x % 20 == 0 == (y % 8 == 0), Prefab("Twoway Toll Road Medium 01"));
+                    MakeRoad(end - new Vector3(0.5f * pitch, 0, 0), end, x % 20 == 0 == (y % 8 == 0), Prefab("Twoway Toll Road Medium 01"));
 
-                    MakeRoad(start + new Vector3(-1, 0, y % 8 == 0 ? -1 : 1) * pitch, start, x % 20 == 0 == (y % 8 == 0), 58);
-                    MakeRoad(end, end + new Vector3(1, 0, y % 8 == 0 ? -1 : 1) * pitch, x % 20 == 0 == (y % 8 == 0), 58);
+                    MakeRoad(start + new Vector3(-1, 0, y % 8 == 0 ? -1 : 1) * pitch, start, x % 20 == 0 == (y % 8 == 0), Prefab("Highway Connection"));
+                    MakeRoad(end, end + new Vector3(1, 0, y % 8 == 0 ? -1 : 1) * pitch, x % 20 == 0 == (y % 8 == 0), Prefab("Highway Connection"));
                 }
             }
 
@@ -420,30 +471,30 @@ namespace ProceduralCities
                         bool flip = (y % 8 == 0) == (x % 20 == 0);
                         var start = new Vector3((x + 5 + x2) * pitch, height, (y + 0.5f) * pitch);
                         var end = new Vector3((x + 5 + x2) * pitch, height, (y + 3.5f) * pitch);
-                        MakeRoad(start, end, false, 68);
+                        MakeRoad(start, end, false, Prefab("Small 4 Lane Road with Bus Lanes Elevated"));
                         if (y != 4)
                         {
-                            MakeRoad(start + new Vector3(-0.5f, 0, -0.5f) * pitch, start, flip == false, 58);
-                            MakeRoad(start + new Vector3(0.5f, 0, -0.5f) * pitch, start, flip == true, 58);
+                            MakeRoad(start + new Vector3(-0.5f, 0, -0.5f) * pitch, start, flip == false, Prefab("Highway Connection"));
+                            MakeRoad(start + new Vector3(0.5f, 0, -0.5f) * pitch, start, flip == true, Prefab("Highway Connection"));
                         }
                         if (y < 42)
                         {
-                            MakeRoad(end, end + new Vector3(-0.5f, 0, 0.5f) * pitch, flip == false, 58);
-                            MakeRoad(end, end + new Vector3(0.5f, 0, 0.5f) * pitch, flip == true, 58);
+                            MakeRoad(end, end + new Vector3(-0.5f, 0, 0.5f) * pitch, flip == false, Prefab("Highway Connection"));
+                            MakeRoad(end, end + new Vector3(0.5f, 0, 0.5f) * pitch, flip == true, Prefab("Highway Connection"));
                         }
 
                         start = new Vector3((x + 5 + x2) * pitch, height, -(y + 0.5f) * pitch);
                         end = new Vector3((x + 5 + x2) * pitch, height, -(y + 3.5f) * pitch);
-                        MakeRoad(start, end, false, 68);
+                        MakeRoad(start, end, false, Prefab("Small 4 Lane Road with Bus Lanes Elevated"));
                         if (y != 4)
                         {
-                            MakeRoad(start + new Vector3(-0.5f, 0, 0.5f) * pitch, start, flip == true, 58);
-                            MakeRoad(start + new Vector3(0.5f, 0, 0.5f) * pitch, start, flip == false, 58);
+                            MakeRoad(start + new Vector3(-0.5f, 0, 0.5f) * pitch, start, flip == true, Prefab("Highway Connection"));
+                            MakeRoad(start + new Vector3(0.5f, 0, 0.5f) * pitch, start, flip == false, Prefab("Highway Connection"));
                         }
                         if (y < 42)
                         {
-                            MakeRoad(end, end + new Vector3(-0.5f, 0, -0.5f) * pitch, flip == true, 58);
-                            MakeRoad(end, end + new Vector3(0.5f, 0, -0.5f) * pitch, flip == false, 58);
+                            MakeRoad(end, end + new Vector3(-0.5f, 0, -0.5f) * pitch, flip == true, Prefab("Highway Connection"));
+                            MakeRoad(end, end + new Vector3(0.5f, 0, -0.5f) * pitch, flip == false, Prefab("Highway Connection"));
                         }
                     }
                 }

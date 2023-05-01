@@ -13,7 +13,7 @@ namespace ProceduralCities
         {
             base.Start();
             name = "GenerateButton";
-            text = $"Generation Stopped {ProceduralCitiesMod.Version}";
+            text = $"ProceduralCities {ProceduralCitiesMod.Version}";
             size = new Vector2(300, 50);
             absolutePosition = new Vector2(50, 50);
             normalBgSprite = "ButtonMenu";
@@ -22,30 +22,65 @@ namespace ProceduralCities
             isInteractive = true;
             Show();
 
+            BuilderInstance.generateButton = this;
+
             eventClicked += OnEventClicked;
         }
 
         private void OnEventClicked(UIComponent component, UIMouseEventParameter param)
         {
-            DebugThing();
-            return;
+            // DebugPrefabThing();
+            ToggleBuilder();
+            // SingleRoadTest();
+        }
 
+        public void RefreshState()
+        {
+            if (BuilderInstance.IsRunning)
+            {
+                text = $"Generation Running {ProceduralCitiesMod.Version}";
+            }
+            else
+            {
+                text = $"Generation Stopped {ProceduralCitiesMod.Version}";
+            }
+        }
+
+        private void SingleRoadTest()
+        {
+            Debug.Log($"SingleRoadTest: {BuilderInstance.StepCount}");
+            if (BuilderInstance.StepCount > 0)
+            {
+                BuilderInstance.ResetRoads();
+                text = "Roads Reset";
+            }
+            else
+            {
+                BuilderInstance.ResetRoads();
+                BuilderInstance.GenerateOneRoad();
+                BuilderInstance.StartBuilding();
+                text = "Building Road";
+            }
+        }
+
+        private void ToggleBuilder()
+        {
             Debug.Log($"Click: {BuilderInstance.IsRunning}");
             if (BuilderInstance.IsRunning)
             {
-                BuilderInstance.Stop();
+                BuilderInstance.StopBuilding();
                 text = $"Generation Stopped {ProceduralCitiesMod.Version}";
             }
             else
             {
-                BuilderInstance.Start();
+                BuilderInstance.StartBuilding();
                 text = $"Generation Running {ProceduralCitiesMod.Version}";
             }
         }
 
-        private void DebugThing()
+        private void DebugPrefabThing()
         {
-            List<uint> prefabIds = new List<uint> { 144, 58, 54, 146 };
+            List<uint> prefabIds = new List<uint> { 144, 58, 54, 146, 68 };
             Dictionary<uint, string> prefabNames = GetPrefabNames(prefabIds);
             PrintPrefabNames(prefabNames);
 
@@ -58,7 +93,7 @@ namespace ProceduralCities
             for (uint i = 0; i < PrefabCollection<NetInfo>.PrefabCount(); i++)
             {
                 NetInfo prefab = PrefabCollection<NetInfo>.GetPrefab(i);
-                if (prefab != null && prefabIds.Contains(i))
+                if (prefab != null) // && prefabIds.Contains(i))
                 {
                     prefabNames[i] = prefab.name;
                 }
