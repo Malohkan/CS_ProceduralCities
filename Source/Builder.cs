@@ -124,7 +124,8 @@ namespace ProceduralCities
             if (genSteps.Count == 0)
             {
                 Debug.Log("Generating Steps");
-                GenerateSteps();
+                GenerateSmallPlan();
+                // GenerateBigPlan();
             }
             Debug.Log($"Start() {Version}: {activeCoroutine == null} && {currentStep} < {genSteps.Count}");
             if (activeCoroutine == null && currentStep < genSteps.Count)
@@ -195,6 +196,116 @@ namespace ProceduralCities
             }
         }
 
+        public ushort GetOrCreateNode(Vector3 position, NetInfo prefab)
+        {
+            NetManager netManager = Singleton<NetManager>.instance;
+            float minDistance = float.MaxValue;
+            ushort nearestNode = 0;
+
+            for (ushort nodeID = 1; nodeID < NetManager.MAX_NODE_COUNT; nodeID++)
+            {
+                if (netManager.m_nodes.m_buffer[nodeID].m_flags != NetNode.Flags.None)
+                {
+                    float distance = Vector3.Distance(position, netManager.m_nodes.m_buffer[nodeID].m_position);
+                    if (distance < minDistance)
+                    {
+                        minDistance = distance;
+                        nearestNode = nodeID;
+                    }
+                }
+            }
+
+            if (minDistance <= 25.0f)
+            {
+                return nearestNode;
+            }
+
+            // If there is no node close enough, check for segments
+            float minSegmentDistance = float.MaxValue;
+            ushort nearestSegment = 0;
+            for (ushort segmentID = 1; segmentID < NetManager.MAX_SEGMENT_COUNT; segmentID++)
+            {
+                if (netManager.m_segments.m_buffer[segmentID].m_flags != NetSegment.Flags.None)
+                {
+                    Bezier3 bezier;
+                    bezier.a = netManager.m_nodes.m_buffer[netManager.m_segments.m_buffer[segmentID].m_startNode].m_position;
+                    bezier.d = netManager.m_nodes.m_buffer[netManager.m_segments.m_buffer[segmentID].m_endNode].m_position;
+                    bezier.b = bezier.a + netManager.m_segments.m_buffer[segmentID].m_startDirection;
+                    bezier.c = bezier.d + netManager.m_segments.m_buffer[segmentID].m_endDirection;
+
+                    float u;
+                    float distanceSqr = bezier.DistanceSqr(position, out u);
+                    
+                    if (distanceSqr < minSegmentDistance * minSegmentDistance)
+                    {
+                        minSegmentDistance = Mathf.Sqrt(distanceSqr);
+                        nearestSegment = segmentID;
+                    }
+                }
+            }
+
+            // If there's a nearby segment, split it and create a new node
+            if (minSegmentDistance <= 25.0f)
+            {
+                Debug.Log($"Found segment to split: {nearestSegment}");
+                if (SplitSegment(nearestSegment, out ushort newNodeID, position))
+                {
+                    return newNodeID;
+                }
+            }
+
+            // If no nearby node or segment found, create a new node at the specified position
+            if (netManager.CreateNode(out ushort newNode, ref Singleton<SimulationManager>.instance.m_randomizer, Singleton<NetManager>.instance.m_nodes.m_buffer[1].Info, position, Singleton<SimulationManager>.instance.m_currentBuildIndex))
+            {
+                netManager.UpdateNode(newNode);
+                return newNode;
+            }
+
+            return 0;
+        }
+
+        public bool SplitSegment(UInt16 segmentID, out UInt16 newNodeID, Vector3 newNodePosition)
+        {
+            NetManager netManager = Singleton<NetManager>.instance;
+            NetSegment segment = netManager.m_segments.m_buffer[segmentID];
+
+            // Get the start and end node positions
+            Vector3 startPos = netManager.m_nodes.m_buffer[segment.m_startNode].m_position;
+            Vector3 endPos = netManager.m_nodes.m_buffer[segment.m_endNode].m_position;
+
+            // Create a new node at the desired position
+            NetInfo prefab = netManager.m_nodes.m_buffer[segment.m_startNode].Info;
+            if (!netManager.CreateNode(out newNodeID, ref Singleton<SimulationManager>.instance.m_randomizer, prefab, newNodePosition, SimulationManager.instance.m_currentBuildIndex))
+            {
+                return false;
+            }
+            SimulationManager.instance.m_currentBuildIndex++;
+
+            // Calculate the new directions for the two new segments
+            Vector3 startDirection = (newNodePosition - startPos).normalized;
+            Vector3 endDirection = (endPos - newNodePosition).normalized;
+
+            // Release the original segment and create two new segments
+            netManager.ReleaseSegment(segmentID, false);
+            if (!netManager.CreateSegment(out UInt16 newSegment1, ref Singleton<SimulationManager>.instance.m_randomizer, segment.Info, segment.m_startNode, newNodeID, startDirection, -startDirection, SimulationManager.instance.m_currentBuildIndex, segment.m_buildIndex, false))
+            {
+                newSegment1 = 0;
+                return false;
+            }
+            SimulationManager.instance.m_currentBuildIndex++;
+
+            if (!netManager.CreateSegment(out UInt16 newSegment2, ref Singleton<SimulationManager>.instance.m_randomizer, segment.Info, newNodeID, segment.m_endNode, endDirection, -endDirection, SimulationManager.instance.m_currentBuildIndex, segment.m_buildIndex, false))
+            {
+                newSegment2 = 0;
+                return false;
+            }
+            SimulationManager.instance.m_currentBuildIndex++;
+            return true;
+        }
+
+
+
+
         void MakeSegment(Vector3 start, Vector3 end, Vector3 startDirection, Vector3 endDirection, NetInfo prefab)
         {
             var netManager = Singleton<NetManager>.instance;
@@ -242,8 +353,8 @@ namespace ProceduralCities
             Vector3 modifiedEnd = new Vector3(end.x, end.y + GetTerrainHeightWithWater(end), end.z);
 
 
-            ushort startNodeId = GetNode(modifiedStart, prefab);
-            ushort endNodeId = GetNode(modifiedEnd, prefab);
+            ushort startNodeId = GetOrCreateNode(modifiedStart, prefab);
+            ushort endNodeId = GetOrCreateNode(modifiedEnd, prefab);
 
             if (netManager.CreateSegment(out segmentId, ref SimulationManager.instance.m_randomizer, prefab, startNodeId, endNodeId, direction, -direction, SimulationManager.instance.m_currentBuildIndex, SimulationManager.instance.m_currentBuildIndex, false))
             {
@@ -295,6 +406,36 @@ namespace ProceduralCities
                 MakeSegment(priorPos, pos, priorDir, -dir, prefab);
             }
         }
+
+        void BuildZonedSpace(Rect outerRect, Rect innerRect)
+        {
+            NetInfo sixLaneRoadPrefab = Prefab("Four Lane Two Way Highway");
+            NetInfo fourLaneRoadPrefab = Prefab("Large Road with Median");
+
+            // Build the outer 6-lane roads
+            MakeRoad(new Vector3(outerRect.xMin, 0, outerRect.yMin), new Vector3(outerRect.xMax, 0, outerRect.yMin), false, sixLaneRoadPrefab);
+            MakeRoad(new Vector3(outerRect.xMin, 0, outerRect.yMax), new Vector3(outerRect.xMax, 0, outerRect.yMax), false, sixLaneRoadPrefab);
+            MakeRoad(new Vector3(outerRect.xMin, 0, outerRect.yMin), new Vector3(outerRect.xMin, 0, outerRect.yMax), false, sixLaneRoadPrefab);
+            MakeRoad(new Vector3(outerRect.xMax, 0, outerRect.yMin), new Vector3(outerRect.xMax, 0, outerRect.yMax), false, sixLaneRoadPrefab);
+
+            // Build the inner 4-lane roads
+            MakeRoad(new Vector3(innerRect.xMin, 0, innerRect.yMin), new Vector3(innerRect.xMax, 0, innerRect.yMin), false, fourLaneRoadPrefab);
+            MakeRoad(new Vector3(innerRect.xMin, 0, innerRect.yMax), new Vector3(innerRect.xMax, 0, innerRect.yMax), false, fourLaneRoadPrefab);
+            MakeRoad(new Vector3(innerRect.xMin, 0, innerRect.yMin), new Vector3(innerRect.xMin, 0, innerRect.yMax), false, fourLaneRoadPrefab);
+            MakeRoad(new Vector3(innerRect.xMax, 0, innerRect.yMin), new Vector3(innerRect.xMax, 0, innerRect.yMax), false, fourLaneRoadPrefab);
+
+            // Connect the outer and inner rectangles at the center of each edge
+            Vector3 outerCenterX = new Vector3(outerRect.center.x, 0, outerRect.yMin);
+            Vector3 outerCenterY = new Vector3(outerRect.xMin, 0, outerRect.center.y);
+            Vector3 innerCenterX = new Vector3(innerRect.center.x, 0, innerRect.yMin);
+            Vector3 innerCenterY = new Vector3(innerRect.xMin, 0, innerRect.center.y);
+
+            MakeRoad(outerCenterX, innerCenterX, false, fourLaneRoadPrefab);
+            MakeRoad(new Vector3(outerCenterX.x, 0, outerRect.yMax), new Vector3(innerCenterX.x, 0, innerRect.yMax), false, fourLaneRoadPrefab);
+            MakeRoad(outerCenterY, innerCenterY, false, fourLaneRoadPrefab);
+            MakeRoad(new Vector3(outerRect.xMax, 0, outerCenterY.z), new Vector3(innerRect.xMax, 0, innerCenterY.z), false, fourLaneRoadPrefab);
+        }
+
 
         void MakeRoad(Vector3 start, Vector3 end, bool flip, NetInfo prefab)
         {
@@ -426,22 +567,83 @@ namespace ProceduralCities
         // ID: 144, Name: Pedestrian Slope
         // ID: 146, Name: Pedestrian Gravel Elevated
 
-        void GenerateSteps()
+
+        void GenerateSmallPlan()
+        {
+            Rect cameraTileBounds = GetCameraTileBounds(Camera.main, 1800);
+
+            Debug.Log($"Camera bounds: {cameraTileBounds}");
+
+            Rect smallerRect = GetCenteredHalfSizeRect(cameraTileBounds);
+
+            BuildZonedSpace(cameraTileBounds, smallerRect);
+        }
+
+        public Rect GetCenteredHalfSizeRect(Rect rect)
+        {
+            float halfWidth = rect.width * 0.5f;
+            float halfHeight = rect.height * 0.5f;
+
+            float centerX = rect.x + halfWidth * 0.5f;
+            float centerY = rect.y + halfHeight * 0.5f;
+
+            return new Rect(centerX, centerY, halfWidth, halfHeight);
+        }
+
+        void MakeRectangleRoad(Rect rect, NetInfo prefab)
+        {
+
+            Vector3 startPoint1 = new Vector3(rect.x, 0, rect.y);
+            Vector3 endPoint1 = new Vector3(rect.x + rect.width, 0, rect.y);
+
+            Vector3 startPoint2 = new Vector3(rect.x, 0, rect.y + rect.height);
+            Vector3 endPoint2 = new Vector3(rect.x + rect.width, 0, rect.y + rect.height);
+
+            Vector3 startPoint3 = new Vector3(rect.x, 0, rect.y);
+            Vector3 endPoint3 = new Vector3(rect.x, 0, rect.y + rect.height);
+
+            Vector3 startPoint4 = new Vector3(rect.x + rect.width, 0, rect.y);
+            Vector3 endPoint4 = new Vector3(rect.x + rect.width, 0, rect.y + rect.height);
+
+            MakeRoad(startPoint1, endPoint1, false, prefab);
+            MakeRoad(startPoint2, endPoint2, false, prefab);
+            MakeRoad(startPoint3, endPoint3, false, prefab);
+            MakeRoad(startPoint4, endPoint4, false, prefab);
+        }
+
+        public Rect GetCameraTileBounds(Camera camera, float tileSize)
+        {
+            Vector3 cameraPosition = camera.transform.position;
+            float offset = tileSize * 0.5f;
+            float x = (Mathf.Floor((cameraPosition.x - offset) / tileSize) * tileSize) + offset;
+            float z = (Mathf.Floor((cameraPosition.z - offset) / tileSize) * tileSize) + offset;
+
+            return new Rect(x, z, tileSize, tileSize);
+        }
+
+
+
+
+        void GenerateBigPlan()
         {
             //MakeSegment(new Vector3(0*pitch, height, -10*pitch), new Vector3(-1*pitch, height, -10*pitch), 144);
             //MakeRoad(new Vector3(0*pitch, height, -10*pitch), new Vector3(-10*pitch, height, -10*pitch), false, 144);
             Debug.Log("GenerateSteps()");
-            for (int x = -50; x <= 50; x += 10)
+            // for (int x = -50; x <= 50; x += 10)
+            for (int x = -25; x <= 25; x += 10)
             {
-                MakeRoad(new Vector3(x * pitch, height, 4 * pitch), new Vector3(x * pitch, height, 43 * pitch), x % 20 == 0, Prefab("Pedestrian Pavement"));
-                MakeRoad(new Vector3(x * pitch, height, -4 * pitch), new Vector3(x * pitch, height, -43 * pitch), x % 20 != 0, Prefab("Pedestrian Pavement"));
+                MakeRoad(new Vector3(x * pitch, height, 4 * pitch), new Vector3(x * pitch, height, 43 * pitch), x % 20 == 0, Prefab("Pedestrian Gravel"));
+                MakeRoad(new Vector3(x * pitch, height, -4 * pitch), new Vector3(x * pitch, height, -43 * pitch), x % 20 != 0, Prefab("Pedestrian Gravel"));
                 MakeBridge(x);
             }
 
+            
             for (int x = -40; x < 40; x += 10)
+            // for (int x = -20; x < 20; x += 10)
             {
                 for (int y = 8; y <= 46; y += 4)
-                {
+                // for (int y = 18; y <= 36; y += 4)
+                    {
                     var start = new Vector3((x + 1) * pitch, height, y * pitch);
                     var end = new Vector3((x + 9) * pitch, height, y * pitch);
                     MakeRoad(start, start + new Vector3(0.5f * pitch, 0, 0), x % 20 == 0 != (y % 8 == 0), Prefab("Twoway Toll Road Medium 01"));
@@ -463,8 +665,10 @@ namespace ProceduralCities
             }
 
             for (int x = -40; x < 40; x += 10)
+            // for (int x = -20; x < 20; x += 10)
             {
                 for (int y = 4; y < 46; y += 4)
+                // for (int y = 14; y < 36; y += 4)
                 {
                     for (int x2 = -3; x2 <= 3; ++x2)
                     {
